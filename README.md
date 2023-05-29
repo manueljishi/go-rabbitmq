@@ -1,0 +1,1 @@
+Test project to learn golang routines, channels and rabbitmq
