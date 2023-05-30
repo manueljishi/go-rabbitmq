@@ -1,4 +1,4 @@
-package main
+package session
 
 import (
 	"errors"
@@ -249,4 +249,8 @@ func (session *Session) Close() error {
 	close(session.done)
 	session.isReady = false
 	return nil
+}
+
+func (session *Session) IsSessionReady() bool {
+	return session.isReady
 }
