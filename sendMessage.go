@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"sync"
 
 	"github.com/manueljishi/go-rabbitmq/session"
 )
@@ -13,16 +15,40 @@ func failOnError(err error, msg string) {
 	}
 }
 
-func main() {
-	name := "job_queue"
-	addr := "amqp://guest:guest@localhost:5672/"
-	s := session.New(name, addr)
-	// Here we connect to RabbitMQ or send a message if there are any errors connecting.
+const (
+	name = "job_queue"
+	addr = "amqp://guest:guest@localhost:5672/"
+)
 
-	defer s.Close()
-	// We set the payload for the message.
-	body := "Golang is awesome - Keep Moving Forward!"
-	err := s.Push([]byte(body))
-	failOnError(err, "Failed to push message to queue")
-	log.Printf(" [x] Congrats, sending message: %s", body)
+func main() {
+	var wg sync.WaitGroup
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+
+		i := i
+
+		go func() {
+			defer wg.Done()
+			socketConnection(i)
+		}()
+
+	}
+	wg.Wait()
+}
+
+func socketConnection(id int) {
+	log.Printf("Routine %d\n", id)
+	s, err := session.GetInstance(name, addr)
+	failOnError(err, "Failed to init session")
+	for i := 0; i < 100; i++ {
+		message := fmt.Sprintf("Message from thread %d number %d", id, i)
+		err := s.ThreadPush([]byte(message))
+
+		if err != nil {
+			continue
+		} else {
+			log.Printf("Sent message from %d", id)
+		}
+	}
 }

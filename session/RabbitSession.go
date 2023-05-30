@@ -4,12 +4,13 @@ import (
 	"errors"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/streadway/amqp"
 )
 
-// This exports a Session object that wraps this library. It
+// This exports a RabbitSession object that wraps this library. It
 // automatically reconnects when the connection fails, and
 // blocks all pushes until the connection succeeds. It also
 // confirms every outgoing message, so none are lost.
@@ -19,7 +20,7 @@ import (
 // Try running this in one terminal, and `rabbitmq-server` in another.
 // Stop & restart RabbitMQ to see how the queue reacts.
 
-type Session struct {
+type RabbitSession struct {
 	name            string
 	logger          *log.Logger
 	connection      *amqp.Connection
@@ -30,6 +31,7 @@ type Session struct {
 	notifyConfirm   chan amqp.Confirmation
 	IsSessionReady  chan bool
 	isReady         bool
+	sessionLock     sync.Mutex
 }
 
 const (
@@ -51,20 +53,23 @@ var (
 
 // New creates a new consumer state instance, and automatically
 // attempts to connect to the server.
-func New(name string, addr string) *Session {
-	session := Session{
+func New(name string, addr string) *RabbitSession {
+	session := RabbitSession{
 		logger:         log.New(os.Stdout, "", log.LstdFlags),
 		name:           name,
 		done:           make(chan bool),
 		IsSessionReady: make(chan bool),
+		sessionLock:    sync.Mutex{},
 	}
+	log.Println(session.IsSessionReady)
 	go session.handleReconnect(addr)
+	<-session.IsSessionReady
 	return &session
 }
 
 // handleReconnect will wait for a connection error on
 // notifyConnClose, and then continuously attempt to reconnect.
-func (session *Session) handleReconnect(addr string) {
+func (session *RabbitSession) handleReconnect(addr string) {
 	for {
 		session.isReady = false
 		log.Println("Attempting to connect")
@@ -89,7 +94,7 @@ func (session *Session) handleReconnect(addr string) {
 }
 
 // connect will create a new AMQP connection
-func (session *Session) connect(addr string) (*amqp.Connection, error) {
+func (session *RabbitSession) connect(addr string) (*amqp.Connection, error) {
 	conn, err := amqp.Dial(addr)
 
 	if err != nil {
@@ -103,7 +108,7 @@ func (session *Session) connect(addr string) (*amqp.Connection, error) {
 
 // handleReconnect will wait for a channel error
 // and then continuously attempt to re-initialize both channels
-func (session *Session) handleReInit(conn *amqp.Connection) bool {
+func (session *RabbitSession) handleReInit(conn *amqp.Connection) bool {
 	for {
 		session.isReady = false
 
@@ -133,7 +138,7 @@ func (session *Session) handleReInit(conn *amqp.Connection) bool {
 }
 
 // init will initialize channel & declare queue
-func (session *Session) init(conn *amqp.Connection) error {
+func (session *RabbitSession) init(conn *amqp.Connection) error {
 	ch, err := conn.Channel()
 
 	if err != nil {
@@ -159,16 +164,16 @@ func (session *Session) init(conn *amqp.Connection) error {
 	}
 
 	session.changeChannel(ch)
-	session.isReady = true
-	s.IsSessionReady <- true
 	log.Println("Setup!")
+	session.isReady = true
+	session.IsSessionReady <- true
 
 	return nil
 }
 
 // changeConnection takes a new connection to the queue,
 // and updates the close listener to reflect this.
-func (session *Session) changeConnection(connection *amqp.Connection) {
+func (session *RabbitSession) changeConnection(connection *amqp.Connection) {
 	session.connection = connection
 	session.notifyConnClose = make(chan *amqp.Error)
 	session.connection.NotifyClose(session.notifyConnClose)
@@ -176,7 +181,7 @@ func (session *Session) changeConnection(connection *amqp.Connection) {
 
 // changeChannel takes a new channel to the queue,
 // and updates the channel listeners to reflect this.
-func (session *Session) changeChannel(channel *amqp.Channel) {
+func (session *RabbitSession) changeChannel(channel *amqp.Channel) {
 	session.channel = channel
 	session.notifyChanClose = make(chan *amqp.Error)
 	session.notifyConfirm = make(chan amqp.Confirmation, 1)
@@ -184,12 +189,18 @@ func (session *Session) changeChannel(channel *amqp.Channel) {
 	session.channel.NotifyPublish(session.notifyConfirm)
 }
 
+func (session *RabbitSession) ThreadPush(data []byte) error {
+	session.sessionLock.Lock()
+	defer session.sessionLock.Unlock()
+	return session.Push(data)
+}
+
 // Push will push data onto the queue, and wait for a confirm.
 // If no confirms are received until within the resendTimeout,
 // it continuously re-sends messages until a confirm is received.
 // This will block until the server sends a confirm. Errors are
 // only returned if the push action itself fails, see UnsafePush.
-func (session *Session) Push(data []byte) error {
+func (session *RabbitSession) Push(data []byte) error {
 	if !session.isReady {
 		return errors.New("failed to push push: not connected")
 	}
@@ -220,7 +231,7 @@ func (session *Session) Push(data []byte) error {
 // confirmation. It returns an error if it fails to connect.
 // No guarantees are provided for whether the server will
 // recieve the message.
-func (session *Session) UnsafePush(data []byte) error {
+func (session *RabbitSession) UnsafePush(data []byte) error {
 	if !session.isReady {
 		return errNotConnected
 	}
@@ -237,7 +248,7 @@ func (session *Session) UnsafePush(data []byte) error {
 }
 
 // Close will cleanly shutdown the channel and connection.
-func (session *Session) Close() error {
+func (session *RabbitSession) Close() error {
 	if !session.isReady {
 		return errAlreadyClosed
 	}
