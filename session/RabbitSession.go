@@ -189,6 +189,8 @@ func (session *RabbitSession) changeChannel(channel *amqp.Channel) {
 	session.channel.NotifyPublish(session.notifyConfirm)
 }
 
+// Thread push will make sure only one routine is able to send a message
+// at a time
 func (session *RabbitSession) ThreadPush(data []byte) error {
 	session.sessionLock.Lock()
 	defer session.sessionLock.Unlock()
