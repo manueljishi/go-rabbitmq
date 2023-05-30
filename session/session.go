@@ -28,6 +28,7 @@ type Session struct {
 	notifyConnClose chan *amqp.Error
 	notifyChanClose chan *amqp.Error
 	notifyConfirm   chan amqp.Confirmation
+	IsSessionReady  chan bool
 	isReady         bool
 }
 
@@ -52,9 +53,10 @@ var (
 // attempts to connect to the server.
 func New(name string, addr string) *Session {
 	session := Session{
-		logger: log.New(os.Stdout, "", log.LstdFlags),
-		name:   name,
-		done:   make(chan bool),
+		logger:         log.New(os.Stdout, "", log.LstdFlags),
+		name:           name,
+		done:           make(chan bool),
+		IsSessionReady: make(chan bool),
 	}
 	go session.handleReconnect(addr)
 	return &session
@@ -158,6 +160,7 @@ func (session *Session) init(conn *amqp.Connection) error {
 
 	session.changeChannel(ch)
 	session.isReady = true
+	s.IsSessionReady <- true
 	log.Println("Setup!")
 
 	return nil
@@ -249,8 +252,4 @@ func (session *Session) Close() error {
 	close(session.done)
 	session.isReady = false
 	return nil
-}
-
-func (session *Session) IsSessionReady() bool {
-	return session.isReady
 }
