@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/manueljishi/go-rabbitmq/session"
 )
@@ -23,7 +24,7 @@ const (
 func main() {
 	var wg sync.WaitGroup
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10000; i++ {
 		wg.Add(1)
 
 		i := i
@@ -41,14 +42,15 @@ func socketConnection(id int) {
 	log.Printf("Routine %d\n", id)
 	s, err := session.GetInstance(name, addr)
 	failOnError(err, "Failed to init session")
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10000; i++ {
 		message := fmt.Sprintf("Message from thread %d number %d", id, i)
-		err := s.ThreadPush([]byte(message))
+		err := s.UnsafePush([]byte(message))
 
 		if err != nil {
 			continue
 		} else {
 			log.Printf("Sent message from %d", id)
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
