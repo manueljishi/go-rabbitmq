@@ -3,7 +3,6 @@ package session
 import (
 	"errors"
 	"log"
-	"os"
 	"sync"
 	"time"
 
@@ -53,19 +52,19 @@ var (
 
 // New creates a new consumer state instance, and automatically
 // attempts to connect to the server.
-func New(name string, addr string) *RabbitSession {
-	session := RabbitSession{
-		logger:         log.New(os.Stdout, "", log.LstdFlags),
-		name:           name,
-		done:           make(chan bool),
-		IsSessionReady: make(chan bool),
-		sessionLock:    sync.Mutex{},
-	}
-	log.Println(session.IsSessionReady)
-	go session.handleReconnect(addr)
-	<-session.IsSessionReady
-	return &session
-}
+// func New(name string, addr string) *RabbitSession {
+// 	session := RabbitSession{
+// 		logger:         log.New(os.Stdout, "", log.LstdFlags),
+// 		name:           name,
+// 		done:           make(chan bool),
+// 		IsSessionReady: make(chan bool),
+// 		sessionLock:    sync.Mutex{},
+// 	}
+// 	log.Println(session.IsSessionReady)
+// 	go session.handleReconnect(addr)
+// 	<-session.IsSessionReady
+// 	return &session
+// }
 
 // handleReconnect will wait for a connection error on
 // notifyConnClose, and then continuously attempt to reconnect.

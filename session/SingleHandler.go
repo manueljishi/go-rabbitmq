@@ -5,10 +5,10 @@ import (
 	"sync"
 )
 
-var s *RabbitSession
+var s *Session
 var lock = &sync.Mutex{}
 
-func GetInstance(queueName string, rabbitUrl string) (*RabbitSession, error) {
+func GetInstance(queueName string, rabbitUrl string) (*Session, error) {
 	if s == nil {
 		lock.Lock()
 		defer lock.Unlock()
