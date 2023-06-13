@@ -37,20 +37,18 @@ func main() {
 
 	}
 	wg.Wait()
-	log.Printf("Sending all messages took %f seconds", time.Now().Sub(t1).Seconds())
+	log.Printf("Sending 1500000 messages took %f seconds", time.Since(t1).Seconds())
+	time.Sleep(10 * time.Second)
 }
 
 func socketConnection(id int) {
 	log.Printf("Routine %d\n", id)
 	s, err := session.GetInstance(name, addr)
 	failOnError(err, "Failed to init session")
-	for i := 0; i < 100; i++ {
-		for j := 0; j < 150; j++ {
-			message := fmt.Sprintf("Message from thread %d number %d", id, i)
-			if err := s.Publish([]byte(message)); err != nil {
-				break
-			}
+	for i := 0; i < 1500000; i++ {
+		message := fmt.Sprintf("Message from thread %d number %d", id, i)
+		if err := s.Publish([]byte(message)); err != nil {
+			break
 		}
-		time.Sleep(time.Second)
 	}
 }
