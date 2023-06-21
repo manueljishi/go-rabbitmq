@@ -46,7 +46,9 @@ func createConnection(addr string, queueName string) *amqp.Channel {
 	}
 	config.Properties.SetClientConnectionName("inversores")
 
-	log.Printf("producer: dialing %s", addr)
+	//do not disclose url and creds
+	// log.Printf("producer: dialing %s", addr)
+	log.Printf("producer: dialing connection to rabbitmq")
 	conn, err := amqp.DialConfig(addr, config)
 	if err != nil {
 		log.Fatalf("producer: error in dial: %s", err)
