@@ -1,3 +1,5 @@
+//TODO: checkear el notifyclose del channel, mucho mas sencillo y seguro
+
 package session
 
 import (
