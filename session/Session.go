@@ -5,39 +5,34 @@ package session
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 var (
-	exitCh               = make(chan struct{})
-	hasErrorChan         = make(chan bool)
-	publishOkCh          = make(chan bool, 1)
-	maxReconnectAttempts = 5
-	connectionTimeout    = 10 * time.Second
+	publishOkCh             = make(chan bool, 1)
+	maxReconnectAttempts    = 10
+	reconnectAttemptTimeout = 2 * time.Second
 )
 
 type Session struct {
-	name         string
-	exitCh       chan struct{}
-	hasErrorChan chan bool
-	publishOkCh  chan bool
-	channel      *amqp.Channel
-	queueName    string
-	isErrored    bool
+	name        string
+	publishOkCh chan bool
+	channel     *amqp.Channel
+	queueName   string
+	isErrored   atomic.Bool
 }
 
 func New(queueName string, addr string) *Session {
 
 	session := Session{
-		name:         queueName,
-		exitCh:       exitCh,
-		hasErrorChan: hasErrorChan,
-		publishOkCh:  publishOkCh,
-		channel:      createConnection(addr, queueName),
-		queueName:    queueName,
-		isErrored:    false,
+		name:        queueName,
+		publishOkCh: publishOkCh,
+		channel:     createConnection(addr, queueName),
+		queueName:   queueName,
+		isErrored:   atomic.Bool{},
 	}
 	// session.subscribeNotifier()
 	session.reconnectToChannel(addr, queueName)
@@ -56,13 +51,15 @@ func createConnection(addr string, queueName string) *amqp.Channel {
 	log.Printf("producer: dialing connection to rabbitmq")
 	conn, err := amqp.DialConfig(addr, config)
 	if err != nil {
-		log.Fatalf("producer: error in dial, could not recover: %s", err)
+		log.Printf("producer: error in dial, could not recover: %s", err)
+		return nil
 	}
 
 	log.Println("producer: got Connection, getting Channel")
 	channel, err := conn.Channel()
 	if err != nil {
-		log.Fatalf("error getting a channel: %s", err)
+		log.Printf("error getting a channel: %s", err)
+		return nil
 	}
 
 	log.Printf("producer: declaring exchange")
@@ -75,7 +72,8 @@ func createConnection(addr string, queueName string) *amqp.Channel {
 		false,     // noWait
 		nil,       // arguments
 	); err != nil {
-		log.Fatalf("producer: Exchange Declare: %s", err)
+		log.Printf("producer: Exchange Declare: %s", err)
+		return nil
 	}
 
 	log.Printf("producer: declaring queue '%s'", queueName)
@@ -91,19 +89,22 @@ func createConnection(addr string, queueName string) *amqp.Channel {
 		log.Printf("producer: declared queue (%q %d messages, %d consumers), binding to Exchange (key %q)",
 			queue.Name, queue.Messages, queue.Consumers, queueName)
 	} else {
-		log.Fatalf("producer: Queue Declare: %s", err)
+		log.Printf("producer: Queue Declare: %s", err)
+		return nil
 	}
 
 	log.Printf("producer: declaring binding")
 	if err := channel.QueueBind(queue.Name, queueName, queueName, false, nil); err != nil {
-		log.Fatalf("producer: Queue Bind: %s", err)
+		log.Printf("producer: Queue Bind: %s", err)
+		return nil
 	}
 
 	// Reliable publisher confirms require confirm.select support from the
 	// connection.
 	log.Printf("producer: enabling publisher confirms.")
 	if err := channel.Confirm(false); err != nil {
-		log.Fatalf("producer: channel could not be put into confirm mode: %s", err)
+		log.Printf("producer: channel could not be put into confirm mode: %s", err)
+		return nil
 	}
 
 	return channel
@@ -111,15 +112,9 @@ func createConnection(addr string, queueName string) *amqp.Channel {
 
 func (s *Session) Publish(data []byte) error {
 
-	if s.isErrored {
-		log.Println("producer: An error was detected, trying to reconnect")
-		select {
-		case <-publishOkCh:
-			s.isErrored = false
-			break
-		case <-time.After(connectionTimeout):
-			log.Fatal("Timeout to reconnect exceeded, exiting application")
-		}
+	if s.isErrored.Load() {
+		<-publishOkCh
+		s.isErrored.Store(false)
 	}
 
 	//Sequential access
@@ -141,9 +136,6 @@ func (s *Session) Publish(data []byte) error {
 	)
 	if err != nil {
 		log.Printf("producer: error in publish: %s, starting reconnect procedure\n ", err)
-		s.isErrored = true
-		s.hasErrorChan <- true
-
 	}
 
 	return nil
@@ -151,10 +143,15 @@ func (s *Session) Publish(data []byte) error {
 }
 
 func (s *Session) reconnectToChannel(address string, queueName string) {
+	errChan := make(chan *amqp.Error)
+	s.channel.NotifyClose(errChan)
 	go func() {
 		for {
 			//receive an error, channel has errored, therefore we need to reconnect
-			<-s.hasErrorChan
+			//channel is closed so we need to reinstantiate
+			<-errChan
+			log.Println("producer: An error was detected, trying to reconnect")
+			s.isErrored.Store(true)
 			couldConnect := false
 			for i := 0; i < maxReconnectAttempts; i++ {
 				channel := createConnection(address, queueName)
@@ -162,10 +159,12 @@ func (s *Session) reconnectToChannel(address string, queueName string) {
 					couldConnect = true
 					s.channel = channel
 					s.publishOkCh <- true
+					errChan = make(chan *amqp.Error)
+					s.channel.NotifyClose(errChan)
 					log.Println("RABBIT SESSION: reconnected, resuming publish activity")
 					break
 				}
-				time.Sleep(time.Second)
+				time.Sleep(reconnectAttemptTimeout)
 			}
 			if !couldConnect {
 				log.Fatal("RABBIT SESSION: Failed to reconnect after max number of attempts")
@@ -173,26 +172,3 @@ func (s *Session) reconnectToChannel(address string, queueName string) {
 		}
 	}()
 }
-
-//This method is not implemented yed
-
-// func (s *Session) subscribeNotifier() {
-// 	unackedMsgs := int32(0)
-// 	go func() {
-// 		confirmsCh := make(chan amqp.Confirmation)
-// 		confirmsCh = s.channel.NotifyPublish(confirmsCh)
-// 		for {
-// 			msg := <-confirmsCh
-// 			if !msg.Ack {
-// 				log.Println(msg)
-// 				atomic.AddInt32(&unackedMsgs, 1)
-// 			}
-// 		}
-// 	}()
-// 	go func() {
-// 		for {
-// 			<-time.After(5 * time.Second)
-// 			log.Printf("There are %d unacked msgs", atomic.LoadInt32(&unackedMsgs))
-// 		}
-// 	}()
-// }
